@@ -7,6 +7,13 @@ import {
   useState,
 } from "react";
 import { useFetchWrapper } from "../use-fetch-wrapper";
+import { ParamsBuilder } from "@/lib/params.builder";
+
+export interface MachineFilter {
+  show?: string;
+  difficulty?: string[];
+  keyword?: string;
+}
 
 type MachinesContextProps = {
   machines: Machine[];
@@ -16,15 +23,40 @@ type MachinesContextProps = {
 
 const MachinesContext = createContext<MachinesContextProps | null>(null);
 
-export const MachinesProvider = ({ children }: { children: ReactNode }) => {
+export const MachinesProvider = ({
+  children,
+  filter,
+}: {
+  children: ReactNode;
+  filter?: MachineFilter;
+}) => {
   const { fetch } = useFetchWrapper();
 
   const [currentPage, setCurrentPage] = useState(0);
   const [machines, setMachines] = useState<Machine[]>([]);
+  const [hydrated, setHydrated] = useState(false);
 
-  async function fetchPage(page?: number) {
+  useEffect(() => {
+    if (!hydrated) return;
+
+    setCurrentPage(0);
+    setMachines([]);
+    fetchPage(1, filter);
+  }, [filter]);
+
+  async function fetchPage(page?: number, filter?: MachineFilter) {
+    const params = ParamsBuilder.new()
+      .addParam("per_page", 15)
+      .addParam("page", page)
+      .addNullableParam("showCompleted", filter?.show)
+      .addNullableArray("difficulty[]", filter?.difficulty)
+      .addNullableParam("keyword", filter?.keyword)
+      .build({
+        encode: false,
+      });
+
     const resp = await fetch(
-      `https://labs.hackthebox.com/api/v5/machines?per_page=15&page=${page}`,
+      `https://labs.hackthebox.com/api/v5/machines?${params}`
     );
 
     const newPage = (await resp.json()) as Page<Machine>;
@@ -40,7 +72,9 @@ export const MachinesProvider = ({ children }: { children: ReactNode }) => {
   }
 
   useEffect(() => {
-    fetchPage(currentPage + 1);
+    if (hydrated) return;
+
+    setHydrated(true);
   }, []);
 
   return (
@@ -49,7 +83,7 @@ export const MachinesProvider = ({ children }: { children: ReactNode }) => {
         machines,
         clear,
         nextPage: async () => {
-          return await fetchPage(currentPage + 1);
+          return await fetchPage(currentPage + 1, filter);
         },
       }}
     >

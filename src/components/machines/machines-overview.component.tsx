@@ -5,9 +5,13 @@ export const MachinesOverview = () => {
   const { machines } = useMachines();
 
   return (
-    <div className="flex flex-col flex-1 w-full h-full space-y-4 px-4 py-4">
-      {machines.map((m) => (
-        <MachineOverviewItem machine={m} />
+    <div className="grid grid-cols-1 gap-4 p-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+      {machines.map((m, index) => (
+        // The item itself no longer needs special flex/size classes,
+        // as the grid container dictates the size.
+        <div key={`machine-item-wrapper-${index}`}>
+          <MachineOverviewItem machine={m} />
+        </div>
       ))}
     </div>
   );

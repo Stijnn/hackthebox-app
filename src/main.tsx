@@ -1,4 +1,3 @@
-import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 
@@ -9,18 +8,23 @@ import { Toaster } from "@/components/ui/sonner";
 
 import "./index.css";
 import { BrowserRouter } from "react-router";
+import { ActiveMachineProvider } from "./components/machines/active-machine.provider";
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-  <React.StrictMode>
-    <ThemeProvider defaultTheme="dark" storageKey="-ui-mode">
-      <ProfileProvider>
-        <Authenticator>
+  <ThemeProvider defaultTheme="dark" storageKey="-ui-mode">
+    <ProfileProvider>
+      <Authenticator>
+        <ActiveMachineProvider
+          polling={{
+            interval: 10000,
+          }}
+        >
           <BrowserRouter>
             <App />
           </BrowserRouter>
-        </Authenticator>
-      </ProfileProvider>
-      <Toaster expand={false} richColors position="top-center" theme="dark" />
-    </ThemeProvider>
-  </React.StrictMode>,
+        </ActiveMachineProvider>
+      </Authenticator>
+    </ProfileProvider>
+    <Toaster expand={false} richColors position="top-center" theme="dark" />
+  </ThemeProvider>
 );
