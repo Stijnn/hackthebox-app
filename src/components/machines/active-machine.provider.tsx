@@ -7,7 +7,6 @@ import {
   useState,
 } from "react";
 import { useFetchWrapper } from "../use-fetch-wrapper";
-import { toast } from "sonner";
 
 export interface ActiveMachine {
   id: number;
