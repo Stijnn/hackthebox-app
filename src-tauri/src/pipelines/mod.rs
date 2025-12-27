@@ -1,238 +1,132 @@
-use std::process::{Child, Command};
-
-use serde::{Deserialize, Serialize};
-use tauri::{
-    async_runtime::{channel, spawn, Receiver, Sender},
-    Emitter,
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex, OnceLock},
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct Pipeline {
-    name: String,
-    commands: Vec<PipelineCommand>,
-}
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct PipelineCommand {
-    name: String,
-    program: String,
-    arguments: Vec<String>,
-    after: Vec<PipelineCommand>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct PipelineEvent {
-    command_name: String,
-    event_type: String,
-    event_message: String,
-}
-
-impl PipelineEvent {
-    fn new(command_name: String, event_type: String, event_message: String) -> Self {
-        Self {
-            command_name,
-            event_type,
-            event_message,
-        }
-    }
-}
-
-/**
- * Spawn pipeline in a async runtime, relay PipelineEvent in real-time using emit invoke.
- */
-#[tauri::command]
-pub(crate) async fn run_pipeline(
-    app: tauri::AppHandle,
-    _window: tauri::Window,
-    pipeline: Option<Pipeline>,
-) -> Result<(), String> {
-    if !cfg!(any(
-        target_os = "windows",
-        target_os = "linux",
-        target_os = "macos"
-    )) {
-        return Err("Not supported".to_owned());
-    }
-
-    let pipeline_spawn_result = spawn_pipeline(pipeline).await;
-    return match pipeline_spawn_result {
-        Ok(mut event_loop) => {
-            while let Some(event) = event_loop.recv().await {
-                let _emit_result = app.emit("pipeline-event", event);
-            }
+fn impl_get_context() -> Vec<(
+    String,
+    Arc<dyn Fn(NativeFnContext) -> Result<(), ()> + Send + Sync>,
+)> {
+    return vec![(
+        "println!".to_string(),
+        Arc::new(|ctx| {
+            println!("{ctx:?}");
             Ok(())
-        }
-        Err(e) => Err(e),
+        }),
+    )];
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub(crate) struct NativeFnContext {
+    name: String,
+    context: Value,
+}
+
+type NativeFn = Arc<dyn Fn(NativeFnContext) -> Result<(), ()> + Send + Sync>;
+static FUNCTION_LIBRARY: OnceLock<Mutex<HashMap<String, NativeFn>>> = OnceLock::new();
+fn impl_get_native_fn_map() -> &'static std::sync::Mutex<
+    HashMap<std::string::String, Arc<dyn Fn(NativeFnContext) -> Result<(), ()> + Send + Sync>>,
+> {
+    FUNCTION_LIBRARY.get_or_init(|| {
+        let mut map: HashMap<String, NativeFn> = HashMap::new();
+        impl_get_context().iter().for_each(|kv| {
+            map.insert(kv.0.clone(), kv.1.clone());
+        });
+        Mutex::new(map)
+    })
+}
+
+async fn impl_find_fn_in_registry(key: String) -> Result<NativeFn, String> {
+    let registry = impl_get_native_fn_map()
+        .lock()
+        .map_err(|_| "Failed to lock registry")?;
+
+    return match registry.get(&key) {
+        Some(f) => Ok(f.clone()),
+        None => Err(format!("Fn({key}) was not found")),
     };
 }
 
+async fn impl_invoke_from_registry(payload: NativeFnContext) -> Result<(), String> {
+    let event_name = payload.name.clone();
+    match impl_find_fn_in_registry(event_name).await {
+        Ok(f) => {
+            let r = (f)(payload);
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
+}
+
 /**
- * Check if program was built for Windows, Linux or MacOS. If so it can run pipelines.
+ * Get available native functions callable with ReactFlow Native Compute Node
  */
 #[tauri::command]
-pub(crate) async fn check_can_run_pipelines() -> bool {
-    cfg!(any(
-        target_os = "windows",
-        target_os = "linux",
-        target_os = "macos"
-    ))
+pub(crate) async fn get_available_native_functions() -> Result<Vec<String>, String> {
+    let registry = impl_get_native_fn_map()
+        .lock()
+        .map_err(|_| "Failed to lock registry")?;
+
+    Ok(registry
+        .iter()
+        .map(|(name, _)| name.clone())
+        .collect::<Vec<String>>())
 }
 
-const PIPELINE_EVENT_BUFFER_SIZE: usize = 32;
-async fn spawn_pipeline(pipeline: Option<Pipeline>) -> Result<Receiver<PipelineEvent>, String> {
-    if pipeline.is_none() {
-        return Err("No pipeline was given...".into());
-    }
-
-    let (tx, rx) = channel::<PipelineEvent>(PIPELINE_EVENT_BUFFER_SIZE);
-    spawn(async move {
-        pipeline.unwrap().run(&tx).await;
-    });
-
-    Ok(rx)
-}
-
-impl Pipeline {
-    async fn run(&self, tx: &Sender<PipelineEvent>) {
-        let _ = tx
-            .send(PipelineEvent::new(
-                "pipeline-started".into(),
-                "info".into(),
-                "Pipeline started".into(),
-            ))
-            .await;
-
-        for cmd in self.commands.clone().into_iter() {
-            cmd.run(tx.clone()).await;
-        }
-
-        let _ = tx
-            .send(PipelineEvent::new(
-                "pipeline-shutdown".into(),
-                "info".into(),
-                "Pipeline shutdown".into(),
-            ))
-            .await;
-    }
-}
-
-impl PipelineCommand {
-    async fn run(&self, tx: Sender<PipelineEvent>) {
-        let spawn_result = Command::new(self.program.as_str())
-            .args(self.arguments.iter())
-            .spawn();
-        match spawn_result {
-            Ok(out) => {
-                forward_child_stdout(out, &tx).await;
-            }
-            Err(e) => {}
-        }
-    }
-}
-
-async fn forward_child_stdout(mut child: Child, tx: &Sender<PipelineEvent>) {
-    let exit_status = child.wait();
-    match exit_status {
-        Ok(status) => {
-            let _ = tx
-                .send(PipelineEvent::new(
-                    "pipeline-exit-status-request".into(),
-                    "exit".into(),
-                    format!("Process exited with code: {:?}", status.code().unwrap()),
-                ))
-                .await;
-        }
-        Err(e) => {
-            let _ = tx
-                .send(PipelineEvent::new(
-                    "pipeline-exit-status-request-error".into(),
-                    "error".into(),
-                    format!("{e:?}").into(),
-                ))
-                .await;
-        }
-    }
+/**
+ * Invoke function from Native Compute Node
+ */
+#[tauri::command]
+pub(crate) async fn invoke_native_fn(
+    app: tauri::AppHandle,
+    window: tauri::Window,
+    invoke_ctx: NativeFnContext,
+) -> Result<(), String> {
+    impl_invoke_from_registry(invoke_ctx).await
 }
 
 #[cfg(test)]
-mod test {
-    use std::future::Future;
+mod pipeline_tests {
+    use tauri::async_runtime::{block_on, spawn_blocking};
 
-    use tauri::async_runtime;
+    use crate::pipelines::{get_available_native_functions, impl_get_native_fn_map};
 
-    use crate::pipelines::{spawn_pipeline, Pipeline, PipelineCommand, PipelineEvent};
+    #[test]
+    fn get_native_fn_map_should_have_println() {
+        let registry = impl_get_native_fn_map()
+            .lock()
+            .map_err(|_| "Could not lock registry");
 
-    fn spawn_blocking<F>(task: F)
-    where
-        F: Future,
-    {
-        tauri::async_runtime::block_on(task);
+        assert!(registry.is_ok(), "Registry retrieval is NOT ok!");
+        if registry.is_err() {
+            return;
+        }
+
+        let registry = registry.unwrap();
+        let a = registry.get(&"println!".to_owned());
+        assert!(
+            a.is_some(),
+            "Could not find println! function in native registry"
+        );
     }
 
-    async fn spawn_test_pipeline(pipeline: Pipeline) -> Result<Vec<PipelineEvent>, String> {
-        let r = async_runtime::spawn(async move {
-            let _r = spawn_pipeline(Some(pipeline)).await;
-            match _r {
-                Ok(mut event_loop) => {
-                    let mut v: Vec<PipelineEvent> = vec![];
-                    while let Some(event) = event_loop.recv().await {
-                        println!("{:?}", event);
-                        v.push(event);
-                    }
-                    Ok(v)
-                }
-                Err(e) => Err(e),
+    #[test]
+    fn get_available_native_functions_should_have_println() {
+        block_on(async move {
+            let available = get_available_native_functions().await;
+
+            assert!(available.is_ok(), "Failed to retrieve function map");
+            if available.is_err() {
+                return;
             }
-        })
-        .await;
 
-        if r.is_err() {
-            return Err(format!("{:?}", r.err()).into());
-        }
-
-        let event_bus_result = r.unwrap();
-        if event_bus_result.is_err() {
-            return Err(format!("{:?}", event_bus_result.err()));
-        }
-
-        Ok(event_bus_result.unwrap())
-    }
-
-    #[test]
-    fn run_pipeline_should_0_status_code() {
-        spawn_blocking(async {
-            let test_pipeline = Pipeline {
-                name: "testing".into(),
-                commands: vec![PipelineCommand {
-                    name: "Run cURL on Endpoint".into(),
-                    program: "curl".into(),
-                    arguments: vec!["--version".into()],
-                    after: vec![],
-                }],
-            };
-
-            let events = spawn_test_pipeline(test_pipeline).await;
-
-            assert!(events.is_ok());
-        });
-    }
-
-    #[test]
-    fn run_pipeline_should_2_status_code() {
-        spawn_blocking(async {
-            let test_pipeline = Pipeline {
-                name: "testing".into(),
-                commands: vec![PipelineCommand {
-                    name: "Run cURL on Endpoint".into(),
-                    program: "curl".into(),
-                    arguments: vec!["--this-command-does-not-exist".into()],
-                    after: vec![],
-                }],
-            };
-
-            let events = spawn_test_pipeline(test_pipeline).await;
-
-            assert!(events.is_ok());
+            assert!(
+                available.unwrap().iter().any(|f| f.eq("println!")),
+                "Could not find println! function that should exist!"
+            );
         });
     }
 }

@@ -6,8 +6,8 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
-            pipelines::run_pipeline,
-            pipelines::check_can_run_pipelines
+            pipelines::invoke_native_fn,
+            pipelines::get_available_native_functions
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
