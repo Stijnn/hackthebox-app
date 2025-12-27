@@ -1,28 +1,17 @@
 use std::process::Command;
 
-use crate::pipelines::NativeFnContext;
+use serde::{Deserialize, Serialize};
 
-pub(super) fn run_nmap(context: NativeFnContext) -> Result<(), ()> {
-    let arg_map = context.context.as_object();
-    if arg_map.is_none() {
-        return Err(());
-    }
-
-    let arg_map = arg_map.unwrap();
-
-    let arguments = arg_map
-        .get("arguments")
-        .unwrap()
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|e| e.as_str().unwrap())
-        .collect();
-
-    run_nmap_elevated(arguments)
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub(crate) struct NmapArguments {
+    arguments: Vec<String>,
 }
 
-pub(super) fn run_nmap_elevated(arguments: Vec<&str>) -> Result<(), ()> {
+pub(super) fn run_nmap(context: NmapArguments) -> Result<(), ()> {
+    run_nmap_elevated(context.arguments)
+}
+
+pub(super) fn run_nmap_elevated(arguments: Vec<String>) -> Result<(), ()> {
     #[cfg(target_os = "linux")]
     let mut cmd = Command::new("pkexec");
 

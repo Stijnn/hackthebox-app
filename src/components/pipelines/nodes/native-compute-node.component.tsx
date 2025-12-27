@@ -46,9 +46,11 @@ export const NativeComputeNode = ({
   const onCompute = ({ callerId }: NativeComputeFunctionProps) => {
     console.log(`Native Compute ${id} called from ${callerId}`);
     invokeFunction({
-      functionName: "nmap",
+      functionName: "log",
       context: {
-        arguments: ["127.0.0.1", "-sA"],
+        level: "Info",
+        message: "This is a log message under info",
+        withTime: true,
       },
     });
     nextInComputeChain();

@@ -1,7 +1,5 @@
-import { BaseHandle } from "@/components/base-handle";
 import {
   BaseNode,
-  BaseNodeContent,
   BaseNodeFooter,
   BaseNodeHeader,
   BaseNodeHeaderTitle,

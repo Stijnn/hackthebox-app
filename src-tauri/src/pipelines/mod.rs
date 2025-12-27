@@ -6,24 +6,47 @@ use std::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::pipelines::nmap::run_nmap;
+use crate::pipelines::{logging::add_log, nmap::run_nmap};
 
+mod logging;
 mod nmap;
 
-fn impl_get_context() -> Vec<(
-    String,
-    Arc<dyn Fn(NativeFnContext) -> Result<(), ()> + Send + Sync>,
-)> {
-    return vec![
-        (
-            "println!".to_string(),
-            Arc::new(|ctx| {
-                println!("{ctx:?}");
-                Ok(())
-            }),
-        ),
-        ("nmap".to_string(), Arc::from(run_nmap)),
-    ];
+type NativeFn = Arc<dyn Fn(NativeFnContext) -> Result<(), ()> + Send + Sync>;
+
+pub fn wrap_native_fn<T, F>(f: F) -> NativeFn
+where
+    T: serde::de::DeserializeOwned + Send + Sync + 'static,
+    F: Fn(T) -> Result<(), ()> + Send + Sync + 'static,
+{
+    Arc::new(
+        move |ctx: NativeFnContext| match serde_json::from_value::<T>(ctx.context) {
+            Ok(typed_args) => f(typed_args),
+            Err(e) => {
+                eprintln!("Deserialization error for {}: {}", ctx.name, e);
+                Err(())
+            }
+        },
+    )
+}
+
+macro_rules! register_native {
+    ($($name:expr => $func:ident),* $(,)?) => {
+        {
+            let mut map: HashMap<String, NativeFn> = HashMap::new();
+            $(
+                map.insert($name.to_string(), wrap_native_fn($func));
+            )*
+            map
+        }
+    };
+}
+
+fn impl_get_context() -> HashMap<String, NativeFn> {
+    register_native![
+        "nmap" => run_nmap,
+        "log" => add_log,
+        "println!" => add_log,
+    ]
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -32,8 +55,8 @@ pub(crate) struct NativeFnContext {
     context: Value,
 }
 
-type NativeFn = Arc<dyn Fn(NativeFnContext) -> Result<(), ()> + Send + Sync>;
 static FUNCTION_LIBRARY: OnceLock<Mutex<HashMap<String, NativeFn>>> = OnceLock::new();
+
 fn impl_get_native_fn_map() -> &'static std::sync::Mutex<
     HashMap<std::string::String, Arc<dyn Fn(NativeFnContext) -> Result<(), ()> + Send + Sync>>,
 > {
@@ -97,7 +120,7 @@ pub(crate) async fn invoke_native_fn(
 
 #[cfg(test)]
 mod pipeline_tests {
-    use tauri::async_runtime::{block_on, spawn_blocking};
+    use tauri::async_runtime::block_on;
 
     use crate::pipelines::{get_available_native_functions, impl_get_native_fn_map};
 
