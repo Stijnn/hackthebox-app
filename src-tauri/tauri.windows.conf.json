@@ -1,0 +1,12 @@
+{
+  "build": {
+    "beforeDevCommand": "python prebuild.py && npm run dev",
+    "beforeBuildCommand": "python prebuild.py --clean --release && npm run build"
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["msi", "nsis"],
+    "resources": ["modules/*.dll"]
+  }
+}
+  

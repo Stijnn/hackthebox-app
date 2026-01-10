@@ -20,7 +20,9 @@ pub async fn open_file_directory_external(dir: String) {
     #[cfg(target_os = "windows")]
     {
         use std::process::Command;
-        let _ = Command::new("start").arg(format!("\"{path}\"")).spawn();
+        let _ = Command::new("cmd")
+            .args(["/C", "start", "explorer", path.as_path().to_str().unwrap()])
+            .spawn();
     }
 }
 
